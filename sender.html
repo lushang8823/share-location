@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>分享位置和画面</title>
+  <script src="https://unpkg.com/peerjs@1.5.1/dist/peerjs.min.js"></script>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 20px; text-align: center; }
+    video { width: 100%; max-width: 300px; border: 2px solid #ccc; border-radius: 12px; }
+    #info { margin: 20px 0; }
+    #roomId { font-weight: bold; background: #f0f0f0; padding: 2px 6px; border-radius: 4px; }
+    #shareLink { word-break: break-all; color: blue; }
+  </style>
+</head>
+<body>
+  <h2>📡 分享我的位置和画面</h2>
+  <div id="info">
+    <p>房间号：<span id="roomId"></span></p >
+    <p>📎 分享链接：<br><span id="shareLink"></span></p >
+  </div>
+  <video id="myVideo" autoplay muted playsinline></video>
+  <p>（这是你自己的画面，别人看不到）</p >
+
+  <script>
+    // 生成一个随机房间号
+    const roomId = Math.random().toString(36).substring(2, 10);
+    document.getElementById('roomId').textContent = roomId;
+
+    // 生成完整分享链接，替换成你部署后的域名
+    const baseUrl = window.location.origin;
+    const fullLink = `${baseUrl}/viewer.html?room=${roomId}`;
+    document.getElementById('shareLink').textContent = fullLink;
+
+    // 连接到 PeerJS 信令服务器
+    const peer = new Peer(roomId);
+
+    // 用来保存数据连接
+    let conn = null;
+
+    // 当有查看者连接时，发送视频
+    peer.on('call', (call) => {
+      navigator.mediaDevices.getUserMedia({ video: true, audio: false })
+        .then(stream => {
+          document.getElementById('myVideo').srcObject = stream;
+          call.answer(stream);
+        })
+        .catch(err => {
+          alert('无法开启摄像头，请检查权限。错误信息: ' + err.message);
+        });
+    });
+
+    // 当有查看者建立数据连接时，定时发送位置
+    peer.on('connection', (connection) => {
+      conn = connection;
+      conn.on('open', () => {
+        // 位置发送定时器
+        setInterval(() => {
+          if (conn && conn.open) {
+            navigator.geolocation.getCurrentPosition(
+              pos => {
+                conn.send({
+                  type: 'location',
+                  lat: pos.coords.latitude,
+                  lng: pos.coords.longitude,
+                  time: Date.now()
+                });
+              },
+              err => {
+                console.warn('位置获取失败:', err.message);
+                // 失败时发送一条错误信息，但不断开
+                if (conn && conn.open) {
+                  conn.send({ type: 'error', msg: '对方无法获取位置' });
+                }
+              },
+              { enableHighAccuracy: true, maximumAge: 3000, timeout: 10000 }
+            );
+          }
+        }, 2000); // 每2秒发一次，省流量
+      });
+    });
+
+    // 错误处理
+    peer.on('error', (err) => {
+      console.error('PeerJS 错误:', err);
+      alert('连接出错：' + err.message);
+    });
+  </script>
+</body>
+</html>
