@@ -17,15 +17,21 @@
       z-index: 9999;
     }
     #remoteVideo { width: 100%; display: block; }
+    #status {
+      position: fixed; bottom: 20px; left: 20px;
+      background: rgba(0,0,0,0.7); color: white; padding: 6px 12px;
+      border-radius: 20px; font-size: 14px; z-index: 9999;
+    }
     .error-msg { padding: 10px; font-size: 12px; color: red; }
   </style>
 </head>
 <body>
   <div id="map"></div>
   <div id="videoContainer">
-    <video id="remoteVideo" autoplay playsinline></video>
+    <video id="remoteVideo" autoplay playsinline muted></video>
     <div id="videoError" class="error-msg" style="display:none;"></div>
   </div>
+  <div id="status">正在连接朋友...</div>
 
   <script>
     // 获取房间号
@@ -38,74 +44,87 @@
 
     // 初始化地图（默认北京中心，等位置更新会移动）
     const map = L.map('map').setView([39.9, 116.4], 15);
-  // 使用高德地图瓦片，国内加载飞快
-L.tileLayer('https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}', {
-  subdomains: ['1','2','3','4'],
-  attribution: '© 高德地图'
-}).addTo(map);
+    // 使用高德地图瓦片，国内加载飞快（已替换原来的 OpenStreetMap）
+    L.tileLayer('https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}', {
+      subdomains: ['1','2','3','4'],
+      attribution: '© 高德地图'
+    }).addTo(map);
 
     const marker = L.marker([39.9, 116.4]).addTo(map);
-    marker.bindPopup('朋友在这里').openPopup();
+    marker.bindPopup('等待位置更新...').openPopup();
+
+    const statusDiv = document.getElementById('status');
+    const videoErrorDiv = document.getElementById('videoError');
+
+    function updateStatus(text) {
+      statusDiv.textContent = text;
+    }
 
     // 连接 Peer
-    const peer = new Peer(); // 随机ID，只用来接收
+    const peer = new Peer();
 
     peer.on('open', () => {
+      updateStatus('已连接到服务器，正在尝试连接分享者...');
+
       // 建立数据连接获取位置
       const conn = peer.connect(roomId, { reliable: true });
+
+      conn.on('open', () => {
+        updateStatus('数据连接已建立，等待位置更新...');
+      });
+
       conn.on('data', (data) => {
         if (data.type === 'location') {
           const { lat, lng } = data;
           marker.setLatLng([lat, lng]);
           map.setView([lat, lng], map.getZoom());
           marker.setPopupContent(`朋友位置: ${lat.toFixed(5)}, ${lng.toFixed(5)}`);
+          updateStatus('位置已更新');
         } else if (data.type === 'error') {
-          document.getElementById('videoError').style.display = 'block';
-          document.getElementById('videoError').textContent = data.msg;
+          videoErrorDiv.style.display = 'block';
+          videoErrorDiv.textContent = data.msg;
+          updateStatus('位置获取失败');
         }
       });
 
       conn.on('error', (err) => {
         console.error('数据连接错误:', err);
+        updateStatus('数据连接错误');
       });
 
-      // 呼叫分享者请求视频
-      // 需要先获取一个假权限来满足浏览器自动播放策略
-      navigator.mediaDevices.getUserMedia({ video: false, audio: false })
-        .then(() => {
-          const call = peer.call(roomId, new MediaStream());
-          call.on('stream', (remoteStream) => {
-            const video = document.getElementById('remoteVideo');
-            video.srcObject = remoteStream;
-            video.style.display = 'block';
-            document.getElementById('videoError').style.display = 'none';
-          });
-          call.on('error', (err) => {
-            console.error('视频连接失败:', err);
-            document.getElementById('videoError').style.display = 'block';
-            document.getElementById('videoError').textContent = '视频连接失败';
-          });
-        })
-        .catch(() => {
-          // 即使假权限失败也尝试呼叫
-          const call = peer.call(roomId, new MediaStream());
-          call.on('stream', (remoteStream) => {
-            const video = document.getElementById('remoteVideo');
-            video.srcObject = remoteStream;
-            video.style.display = 'block';
-          });
-          call.on('error', (err) => {
-            document.getElementById('videoError').style.display = 'block';
-            document.getElementById('videoError').textContent = '视频连接失败';
-          });
-        });
+      // 呼叫分享者请求视频（不发送本地视频流）
+      const call = peer.call(roomId, null); // 传 null 表示不发送本地流
+
+      call.on('stream', (remoteStream) => {
+        const video = document.getElementById('remoteVideo');
+        video.srcObject = remoteStream;
+        video.style.display = 'block';
+        videoErrorDiv.style.display = 'none';
+        updateStatus('视频已连接');
+        // 尝试主动播放（应对自动播放策略）
+        video.play().catch(e => console.warn('视频自动播放失败，可能需要点击页面', e));
+      });
+
+      call.on('error', (err) => {
+        console.error('视频连接失败:', err);
+        videoErrorDiv.style.display = 'block';
+        videoErrorDiv.textContent = '视频连接失败';
+        updateStatus('视频连接失败');
+      });
     });
 
     peer.on('error', (err) => {
       console.error('Peer错误:', err);
-      document.getElementById('videoError').style.display = 'block';
-      document.getElementById('videoError').textContent = '连接错误: ' + err.message;
+      updateStatus('连接错误: ' + err.message);
     });
+
+    // 如果用户点击页面，尝试恢复视频播放（应对自动播放限制）
+    document.addEventListener('click', () => {
+      const video = document.getElementById('remoteVideo');
+      if (video.srcObject && video.paused) {
+        video.play().catch(() => {});
+      }
+    }, { once: false });
   </script>
 </body>
 </html>
