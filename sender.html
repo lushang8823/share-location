@@ -28,8 +28,10 @@
     document.getElementById('roomId').textContent = roomId;
 
     // 生成完整分享链接，替换成你部署后的域名
-    const baseUrl = window.location.origin;
-    const fullLink = `${baseUrl}/viewer.html?room=${roomId}`;
+   // 正确生成查看者链接（自动带上子目录路径）
+   const viewerUrl = new URL('viewer.html', window.location.href);
+  viewerUrl.searchParams.set('room', roomId);
+   const fullLink = viewerUrl.href;
     document.getElementById('shareLink').textContent = fullLink;
 
     // 连接到 PeerJS 信令服务器
