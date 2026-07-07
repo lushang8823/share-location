@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>查看朋友位置</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/peerjs@1.5.1/dist/peerjs.min.js"></script>
+  <style>
+    body { margin: 0; font-family: Arial, sans-serif; }
+    #map { height: 100vh; width: 100%; }
+    #videoContainer {
+      position: fixed; top: 10px; right: 10px;
+      width: 140px; background: white; border-radius: 12px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.3); overflow: hidden;
+      z-index: 9999;
+    }
+    #remoteVideo { width: 100%; display: block; }
+    .error-msg { padding: 10px; font-size: 12px; color: red; }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <div id="videoContainer">
+    <video id="remoteVideo" autoplay playsinline></video>
+    <div id="videoError" class="error-msg" style="display:none;"></div>
+  </div>
+
+  <script>
+    // 获取房间号
+    const params = new URLSearchParams(window.location.search);
+    const roomId = params.get('room');
+    if (!roomId) {
+      document.body.innerHTML = '<h2>❌ 链接无效，缺少房间号</h2>';
+      throw new Error('缺少房间号');
+    }
+
+    // 初始化地图（默认北京中心，等位置更新会移动）
+    const map = L.map('map').setView([39.9, 116.4], 15);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '© OpenStreetMap contributors'
+    }).addTo(map);
+
+    const marker = L.marker([39.9, 116.4]).addTo(map);
+    marker.bindPopup('朋友在这里').openPopup();
+
+    // 连接 Peer
+    const peer = new Peer(); // 随机ID，只用来接收
+
+    peer.on('open', () => {
+      // 建立数据连接获取位置
+      const conn = peer.connect(roomId, { reliable: true });
+      conn.on('data', (data) => {
+        if (data.type === 'location') {
+          const { lat, lng } = data;
+          marker.setLatLng([lat, lng]);
+          map.setView([lat, lng], map.getZoom());
+          marker.setPopupContent(`朋友位置: ${lat.toFixed(5)}, ${lng.toFixed(5)}`);
+        } else if (data.type === 'error') {
+          document.getElementById('videoError').style.display = 'block';
+          document.getElementById('videoError').textContent = data.msg;
+        }
+      });
+
+      conn.on('error', (err) => {
+        console.error('数据连接错误:', err);
+      });
+
+      // 呼叫分享者请求视频
+      // 需要先获取一个假权限来满足浏览器自动播放策略
+      navigator.mediaDevices.getUserMedia({ video: false, audio: false })
+        .then(() => {
+          const call = peer.call(roomId, new MediaStream());
+          call.on('stream', (remoteStream) => {
+            const video = document.getElementById('remoteVideo');
+            video.srcObject = remoteStream;
+            video.style.display = 'block';
+            document.getElementById('videoError').style.display = 'none';
+          });
+          call.on('error', (err) => {
+            console.error('视频连接失败:', err);
+            document.getElementById('videoError').style.display = 'block';
+            document.getElementById('videoError').textContent = '视频连接失败';
+          });
+        })
+        .catch(() => {
+          // 即使假权限失败也尝试呼叫
+          const call = peer.call(roomId, new MediaStream());
+          call.on('stream', (remoteStream) => {
+            const video = document.getElementById('remoteVideo');
+            video.srcObject = remoteStream;
+            video.style.display = 'block';
+          });
+          call.on('error', (err) => {
+            document.getElementById('videoError').style.display = 'block';
+            document.getElementById('videoError').textContent = '视频连接失败';
+          });
+        });
+    });
+
+    peer.on('error', (err) => {
+      console.error('Peer错误:', err);
+      document.getElementById('videoError').style.display = 'block';
+      document.getElementById('videoError').textContent = '连接错误: ' + err.message;
+    });
+  </script>
+</body>
+</html>
